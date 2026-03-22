@@ -3,8 +3,6 @@
 A production-ready, real-time multiplayer Tic-Tac-Toe game with **server-authoritative architecture** using Nakama as the game backend infrastructure.
 
 > **Live Demo:** https://tic-tac-toe-two-self-80.vercel.app  
-> **Nakama Server:** http://143.110.176.47:7350  
-> **Nakama Console:** http://143.110.176.47:7351 (admin / password)
 
 ---
 
