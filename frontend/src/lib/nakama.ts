@@ -1,0 +1,127 @@
+import { Client, Session, Socket } from '@heroiclabs/nakama-js';
+
+// ── Config ───────────────────────────────────────────────────
+export const NAKAMA_HOST = import.meta.env.VITE_NAKAMA_HOST || 'localhost';
+export const NAKAMA_PORT = import.meta.env.VITE_NAKAMA_PORT || '7350';
+export const NAKAMA_USE_SSL = import.meta.env.VITE_NAKAMA_SSL === 'true';
+export const SERVER_KEY = import.meta.env.VITE_NAKAMA_SERVER_KEY || 'defaultkey';
+
+// ── OpCodes (must match server) ──────────────────────────────
+export const OpCode = {
+  GAME_STATE: 1,
+  MOVE_ACCEPTED: 2,
+  MOVE_REJECTED: 3,
+  GAME_OVER: 4,
+  PLAYER_JOINED: 5,
+  PLAYER_LEFT: 6,
+  WAITING_FOR_OPPONENT: 7,
+  MAKE_MOVE: 101,
+} as const;
+
+// ── Types ─────────────────────────────────────────────────────
+export interface GameState {
+  board: (string | null)[];
+  currentTurn: string;
+  playerX: string;
+  playerO: string;
+  playerXUsername: string;
+  playerOUsername: string;
+  status: 'waiting' | 'playing' | 'finished';
+  winner: string | null;
+  winningLine: number[] | null;
+  moveCount: number;
+  reason?: string;
+}
+
+export interface LeaderboardEntry {
+  userId: string;
+  username: string;
+  wins: number;
+  losses: number;
+  winRate: number;
+}
+
+// ── Nakama singleton ─────────────────────────────────────────
+class NakamaClient {
+  public client: Client;
+  public session: Session | null = null;
+  public socket: Socket | null = null;
+
+  constructor() {
+    this.client = new Client(SERVER_KEY, NAKAMA_HOST, NAKAMA_PORT, NAKAMA_USE_SSL);
+  }
+
+  async authenticateDevice(deviceId: string, username: string): Promise<Session> {
+    this.session = await this.client.authenticateDevice(deviceId, true, username);
+    return this.session;
+  }
+
+  async createSocket(): Promise<Socket> {
+    if (!this.session) throw new Error('Not authenticated');
+    if (this.socket) return this.socket;  // ← add this line
+    this.socket = this.client.createSocket(NAKAMA_USE_SSL, false);
+    await this.socket.connect(this.session, true);
+    return this.socket;
+  }
+
+  async findMatch(): Promise<string> {
+    if (!this.session) throw new Error('Not authenticated');
+    const result = await this.client.rpc(this.session, 'find_match', null);
+    const data = typeof result.payload === 'string' ? JSON.parse(result.payload) : result.payload;
+    return data.matchId;
+}
+
+async getLeaderboard(): Promise<LeaderboardEntry[]> {
+    if (!this.session) throw new Error('Not authenticated');
+    const result = await this.client.rpc(this.session, 'get_leaderboard', null);
+    const data = typeof result.payload === 'string' ? JSON.parse(result.payload) : result.payload;
+    return data.leaderboard || [];
+}
+
+  async joinMatch(matchId: string) {
+    if (!this.socket) throw new Error('Socket not connected');
+    return await this.socket.joinMatch(matchId);
+  }
+
+  async leaveMatch(matchId: string) {
+    if (!this.socket) return;
+    try {
+      await this.socket.leaveMatch(matchId);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  sendMove(matchId: string, position: number) {
+    if (!this.socket) throw new Error('Socket not connected');
+    const data = new TextEncoder().encode(JSON.stringify({ position }));
+    this.socket.sendMatchState(matchId, OpCode.MAKE_MOVE, data);
+  }
+
+  disconnect() {
+    this.socket?.disconnect(false);
+    this.socket = null;
+    this.session = null;
+  }
+}
+
+export const nakama = new NakamaClient();
+
+// ── Device ID persistence ─────────────────────────────────────
+export function getOrCreateDeviceId(): string {
+  const key = 'ttt_device_id';
+  let id = localStorage.getItem(key);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
+
+export function getSavedUsername(): string | null {
+  return localStorage.getItem('ttt_username');
+}
+
+export function saveUsername(username: string) {
+  localStorage.setItem('ttt_username', username);
+}

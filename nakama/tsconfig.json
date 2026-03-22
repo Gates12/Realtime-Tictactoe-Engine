@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES5",
+    "lib": ["ES2017"],
+    "strict": false,
+    "esModuleInterop": true,
+    "module": "commonjs",
+    "outDir": "./build",
+    "rootDir": "./modules"
+  },
+  "files": [
+    "./node_modules/nakama-runtime/index.d.ts",
+    "./modules/tictactoe.ts"
+  ],
+  "exclude": ["node_modules"]
+}
