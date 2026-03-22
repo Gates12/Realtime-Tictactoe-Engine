@@ -456,6 +456,4 @@ curl http://143.110.176.47:7350/v2/rpc/get_leaderboard \
 
 ---
 
-## 📜 License
 
-MIT
