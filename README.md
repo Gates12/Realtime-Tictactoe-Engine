@@ -1,133 +1,191 @@
-# TicTacToe — Real-time Multiplayer
+# 🎮 TicTacToe — Real-Time Multiplayer
 
-A production-ready multiplayer Tic-Tac-Toe game with **server-authoritative architecture** using Nakama as the game backend.
+A production-ready, real-time multiplayer Tic-Tac-Toe game with **server-authoritative architecture** using Nakama as the game backend infrastructure.
 
-## Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 18, Vite, Tailwind CSS, Framer Motion |
-| Realtime Client | Nakama JS SDK |
-| Game Backend | Nakama 3.22 (TypeScript runtime) |
-| Database | CockroachDB |
-| Deployment | Docker Compose + DigitalOcean |
+> **Live Demo:** https://tic-tac-toe-two-self-80.vercel.app  
+> **Nakama Server:** http://143.110.176.47:7350  
+> **Nakama Console:** http://143.110.176.47:7351 (admin / password)
 
 ---
 
-## Architecture
+## 📋 Table of Contents
+
+1. [Tech Stack](#-tech-stack)
+2. [Architecture & Design Decisions](#-architecture--design-decisions)
+3. [Project Structure](#-project-structure)
+4. [Setup & Installation](#-setup--installation)
+5. [Deployment Process](#-deployment-process)
+6. [API & Server Configuration](#-api--server-configuration)
+7. [How to Test Multiplayer](#-how-to-test-multiplayer)
+8. [Features Checklist](#-features-checklist)
+
+---
+
+## 🛠️ Tech Stack
+
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| Frontend | React 18 + Vite | UI framework |
+| Styling | Tailwind CSS | Responsive design |
+| Realtime Client | Nakama JS SDK v2.8.0 | WebSocket + REST |
+| Game Backend | Nakama 3.22.0 | Game server |
+| Server Runtime | JavaScript (ES5) | Game logic module |
+| Database | CockroachDB v23.1 | Persistent storage |
+| Backend Hosting | DigitalOcean (2GB RAM) | Cloud server |
+| Frontend Hosting | Vercel | Static hosting |
+| HTTPS Tunnel | Cloudflare Tunnel | SSL for WebSockets |
+| Containerization | Docker + Docker Compose | Service management |
+
+---
+
+## 🏗️ Architecture & Design Decisions
+
+### System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    React Frontend                        │
-│  Login → Lobby → Game Board → Leaderboard               │
-│  Nakama JS SDK (WebSocket + REST)                       │
-└────────────────────┬────────────────────────────────────┘
-                     │  WebSocket (port 7349)
-                     │  REST API  (port 7350)
-┌────────────────────▼────────────────────────────────────┐
-│                  Nakama Server                           │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │          TypeScript Runtime Module               │  │
-│  │  ┌─────────────┐  ┌───────────┐  ┌──────────┐  │  │
-│  │  │ Match Logic  │  │  RPCs     │  │ Leaderbd │  │  │
-│  │  │ (server auth)│  │ find_match│  │  global  │  │  │
-│  │  └─────────────┘  └───────────┘  └──────────┘  │  │
-│  └──────────────────────────────────────────────────┘  │
-└────────────────────┬────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────┐
-│                  CockroachDB                             │
-│  Sessions · Leaderboards · Match history                │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│           React Frontend (Vercel HTTPS)               │
+│                                                       │
+│   LoginPage → GamePage → LeaderboardPage              │
+│                                                       │
+│   Nakama JS SDK                                       │
+│   ├── REST API  → Authentication, RPC calls           │
+│   └── WebSocket → Real-time game events               │
+└─────────────────────┬────────────────────────────────┘
+                      │
+                      │ HTTPS + WSS
+                      │ (via Cloudflare Tunnel)
+                      │
+┌─────────────────────▼────────────────────────────────┐
+│           Nakama Server (DigitalOcean)                │
+│                                                       │
+│  ┌─────────────────────────────────────────────────┐ │
+│  │           tictactoe.js Runtime Module            │ │
+│  │                                                  │ │
+│  │  matchInit        → Initialize empty board       │ │
+│  │  matchJoinAttempt → Validate join requests       │ │
+│  │  matchJoin        → Assign X/O, start game       │ │
+│  │  matchLoop        → Check 30s turn timer         │ │
+│  │  matchLeave       → Handle disconnections        │ │
+│  │  handleMove       → Validate & apply moves       │ │
+│  │  rpcFindMatch     → Auto matchmaking             │ │
+│  │  rpcGetLeaderboard→ Rankings                     │ │
+│  └─────────────────────────────────────────────────┘ │
+└─────────────────────┬────────────────────────────────┘
+                      │
+┌─────────────────────▼────────────────────────────────┐
+│                  CockroachDB                          │
+│   Sessions · Leaderboards · Match History             │
+└──────────────────────────────────────────────────────┘
 ```
 
 ### Server-Authoritative Design
 
-All game logic runs **exclusively on the Nakama server**. The client only sends:
-- `MAKE_MOVE` (opcode 101) — `{ position: 0-8 }`
+All game logic runs **exclusively on the Nakama server**. The client only sends player intent — the server validates, applies, and broadcasts results.
 
-The server validates every move before applying it. Possible rejection reasons:
-- Not your turn
-- Cell already occupied
-- Invalid position
-- Game not in progress
+**Client only sends:**
+```json
+{ "position": 4 }
+```
+*(OpCode 101 — MAKE_MOVE)*
 
-This prevents all forms of client-side cheating.
+**Server validates every move for:**
+- ✅ Game is currently in progress
+- ✅ It is this player's turn
+- ✅ Position is valid (0–8)
+- ✅ Cell is empty
+- ✅ Turn timer has not expired (30 seconds)
+
+If any check fails → server sends `MOVE_REJECTED` → board does not change. This prevents all forms of client-side cheating.
+
+### Key Design Decisions
+
+**Why Nakama?**
+Built-in matchmaking, WebSocket management, leaderboards, and auth — no reinventing the wheel. Handles N concurrent match sessions with full isolation.
+
+**Why CockroachDB?**
+Nakama's default database. Handles session persistence and leaderboard data out of the box. Horizontally scalable.
+
+**Why Device ID Auth?**
+Frictionless — no email/password needed. Players start immediately. Device ID persists in localStorage for session continuity.
+
+**Why Cloudflare Tunnel?**
+Vercel serves HTTPS. Browsers block mixed content (HTTPS → HTTP). Cloudflare Tunnel provides a free HTTPS+WSS endpoint proxying to Nakama.
+
+**Why Pure ES5 JavaScript for Server Module?**
+Nakama's embedded JS engine (goja) has limited ES6+ support. Pure ES5 ensures maximum compatibility — no shorthand properties or spread operators that cause parser panics.
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 tictactoe/
 ├── nakama/
 │   ├── modules/
-│   │   └── tictactoe.ts        # Server game logic (TypeScript)
+│   │   └── tictactoe.js        # Server game logic (pure ES5 JS)
 │   ├── docker-compose.yml      # Local dev (Nakama + CockroachDB)
 │   ├── package.json
 │   └── tsconfig.json
 ├── frontend/
 │   ├── src/
-│   │   ├── lib/nakama.ts       # Nakama client singleton + types
+│   │   ├── lib/
+│   │   │   └── nakama.ts       # Nakama client singleton + types
 │   │   ├── hooks/
-│   │   │   ├── useAuth.tsx     # Auth context
-│   │   │   └── useMatch.ts     # Real-time match state
+│   │   │   └── useAuth.tsx     # Authentication context
 │   │   ├── pages/
-│   │   │   ├── LoginPage.tsx
-│   │   │   ├── LobbyPage.tsx
-│   │   │   ├── GamePage.tsx
+│   │   │   ├── LoginPage.tsx   # Username entry
+│   │   │   ├── GamePage.tsx    # Matchmaking + game board
 │   │   │   └── LeaderboardPage.tsx
 │   │   └── components/
-│   │       ├── Board.tsx
-│   │       ├── PlayerCard.tsx
+│   │       ├── Board.tsx       # Game grid with animations
+│   │       ├── PlayerCard.tsx  # Player info + turn indicator
+│   │       ├── TurnTimer.tsx   # 30s countdown timer
 │   │       ├── GameOverModal.tsx
 │   │       └── Navbar.tsx
 │   ├── .env.example
 │   └── package.json
 ├── deployment/
-│   ├── docker-compose.prod.yml
-│   └── digitalocean-setup.sh
-└── scripts/
-    └── build-module.sh
+│   └── docker-compose.prod.yml
+└── README.md
 ```
 
 ---
 
-## Local Development Setup
+## ⚙️ Setup & Installation
 
 ### Prerequisites
 
-- Docker & Docker Compose
-- Node.js 18+
-- npm
+- Docker Desktop installed and running
+- Node.js 18+ and npm
+- Git
 
-### 1. Start Nakama Backend
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/YOUR_USERNAME/tictactoe.git
+cd tictactoe
+```
+
+### 2. Start Nakama Backend (Local)
 
 ```bash
 cd nakama
 
-# Install TypeScript dependencies
-npm install
-
-# Compile the TypeScript module
-npx tsc --build
-# Output: nakama/build/tictactoe.js
-
 # Start Nakama + CockroachDB
-# Note: docker-compose.yml mounts the modules/ folder
-# Copy the compiled JS to modules/ first:
-cp build/tictactoe.js modules/
-
 docker compose up -d
 
-# Check it's running
-docker compose logs -f nakama
+# Wait ~30 seconds then verify
+curl http://localhost:7350/ && echo "Nakama is up!"
+
+# Watch logs
+docker logs ttt-nakama --tail 20
 ```
 
-Nakama Console → http://localhost:7351  
-Default credentials: `admin` / `password`
+**Nakama Console:** http://localhost:7351  
+**Credentials:** `admin` / `password`
 
-### 2. Start Frontend
+### 3. Start Frontend (Local)
 
 ```bash
 cd frontend
@@ -135,181 +193,271 @@ cd frontend
 # Install dependencies
 npm install
 
-# Copy env config
+# Configure environment
 cp .env.example .env.local
-# Edit .env.local — defaults work for local Nakama
+# Default values work for local Nakama — no changes needed
 
 # Start dev server
 npm run dev
 ```
 
-Open → http://localhost:3000
+**Open:** http://localhost:3000
 
-### 3. Test Multiplayer
+### Environment Variables
 
-Open two browser tabs (or two different browsers) and:
-1. Log in with different usernames
-2. Click **Find Match** in both tabs
-3. First player creates a room, second player joins it automatically
-4. Play the game — moves are validated server-side
+```bash
+# Local development (.env.local)
+VITE_NAKAMA_HOST=localhost
+VITE_NAKAMA_PORT=7350
+VITE_NAKAMA_SSL=false
+VITE_NAKAMA_SERVER_KEY=defaultkey
+
+# Production
+VITE_NAKAMA_HOST=your-tunnel.trycloudflare.com
+VITE_NAKAMA_PORT=443
+VITE_NAKAMA_SSL=true
+VITE_NAKAMA_SERVER_KEY=defaultkey
+```
 
 ---
 
-## Message Protocol
+## 🚀 Deployment Process
 
-### Client → Server
+### Backend — DigitalOcean Droplet
+
+**Droplet specs:**
+- Ubuntu 22.04 LTS x64
+- 2GB RAM / 1 vCPU ($12/mo)
+- Region: Bangalore (BLR1)
+- IP: `143.110.176.47`
+
+**Step 1 — Initial server setup:**
+```bash
+ssh root@143.110.176.47
+
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+systemctl enable docker && systemctl start docker
+
+# Create project directory
+mkdir -p /opt/tictactoe/modules
+```
+
+**Step 2 — Upload module (from local machine):**
+```bash
+scp nakama/modules/tictactoe.js root@143.110.176.47:/opt/tictactoe/modules/
+scp deployment/docker-compose.prod.yml root@143.110.176.47:/opt/tictactoe/docker-compose.yml
+```
+
+**Step 3 — Start services (on server):**
+```bash
+cd /opt/tictactoe
+docker compose up -d
+
+# Verify Nakama is running
+curl http://localhost:7350/ && echo "Nakama is up!"
+```
+
+**Step 4 — Set up Cloudflare Tunnel (HTTPS):**
+```bash
+# Install cloudflared
+curl -L --output cloudflared.deb \
+  https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+dpkg -i cloudflared.deb
+
+# Create auto-restart systemd service
+cat > /etc/systemd/system/cloudflared.service << 'EOF'
+[Unit]
+Description=Cloudflare Tunnel
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/cloudflared tunnel --url http://localhost:7350 --no-autoupdate
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/cloudflared.log
+StandardError=append:/var/log/cloudflared.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl enable cloudflared
+systemctl start cloudflared
+
+# Get your tunnel URL
+cat /var/log/cloudflared.log | grep "trycloudflare.com"
+```
+
+### Frontend — Vercel
+
+**Step 1 — Build and deploy:**
+```bash
+cd frontend
+npm run build
+npx vercel --prod
+```
+
+**Step 2 — Set environment variables on Vercel:**
+
+Go to: **Project → Settings → Environment Variables**
+
+| Variable | Value |
+|----------|-------|
+| `VITE_NAKAMA_HOST` | `your-tunnel.trycloudflare.com` |
+| `VITE_NAKAMA_PORT` | `443` |
+| `VITE_NAKAMA_SSL` | `true` |
+| `VITE_NAKAMA_SERVER_KEY` | `defaultkey` |
+
+**Step 3 — Connect GitHub for auto-deploy:**
+
+Project → Settings → Git → Connect Repository → select your repo.
+Every `git push` to `main` automatically redeploys.
+
+**Step 4 — Verify deployment:**
+```bash
+# Nakama API responding
+curl http://143.110.176.47:7350/
+
+# Module loaded
+docker exec ttt-nakama ls /nakama/data/modules/
+
+# Open Nakama console in browser
+# http://143.110.176.47:7351
+```
+
+---
+
+## 📡 API & Server Configuration
+
+### Nakama Server Flags
+
+| Flag | Value | Description |
+|------|-------|-------------|
+| `--name` | `nakama1` | Node name |
+| `--logger.level` | `WARN` | Log verbosity |
+| `--session.token_expiry_sec` | `7200` | Session TTL (2 hours) |
+| `--runtime.path` | `/nakama/data/modules` | Module directory |
+| `--runtime.js_entrypoint` | `tictactoe.js` | Entry module file |
+| `--socket.outgoing_queue_size` | `64` | WebSocket buffer size |
+
+### RPC Endpoints
+
+| RPC ID | Description | Auth Required |
+|--------|-------------|---------------|
+| `find_match` | Find open match or create new one | Session token |
+| `get_leaderboard` | Return top 20 players by wins | Session token |
+
+**Example REST call:**
+```bash
+curl http://143.110.176.47:7350/v2/rpc/get_leaderboard \
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN"
+```
+
+### Message Protocol (OpCodes)
+
+**Client → Server:**
 
 | OpCode | Name | Payload |
 |--------|------|---------|
 | 101 | `MAKE_MOVE` | `{ position: number }` (0–8) |
 
-### Server → Client
+**Server → Client:**
 
 | OpCode | Name | Payload |
 |--------|------|---------|
-| 1 | `GAME_STATE` | Full `GameState` object |
+| 1 | `GAME_STATE` | Full GameState object |
 | 2 | `MOVE_ACCEPTED` | — |
 | 3 | `MOVE_REJECTED` | `{ reason: string }` |
-| 4 | `GAME_OVER` | `GameState + { reason: "win" \| "draw" \| "opponent_disconnected" }` |
-| 5 | `PLAYER_JOINED` | — |
-| 6 | `PLAYER_LEFT` | — |
+| 4 | `GAME_OVER` | `GameState + { reason }` |
 | 7 | `WAITING_FOR_OPPONENT` | `{ message: string }` |
+| 8 | `TURN_TIMEOUT` | Full GameState object |
 
 ### GameState Object
 
 ```typescript
 {
-  board: (string | null)[],     // 9 cells: "X" | "O" | null
-  currentTurn: string,          // session ID of player whose turn it is
-  playerX: string,              // session ID
-  playerO: string,              // session ID
+  board: (string | null)[],      // 9 cells: "X" | "O" | null
+  currentTurn: string,           // userId of player whose turn it is
+  playerX: string,               // userId of X player
+  playerO: string,               // userId of O player
   playerXUsername: string,
   playerOUsername: string,
   status: "waiting" | "playing" | "finished",
-  winner: string | null,        // session ID or "draw"
-  winningLine: number[] | null, // indices of winning cells
-  moveCount: number
+  winner: string | null,         // userId or "draw"
+  winningLine: number[] | null,  // e.g. [0, 1, 2]
+  moveCount: number,
+  turnStartTime: number,         // Unix timestamp ms
+  reason?: string                // "win" | "draw" | "opponent_disconnected" | "timeout"
 }
 ```
 
 ---
 
-## Deployment to DigitalOcean
+## 🧪 How to Test Multiplayer
 
-### Step 1 — Create Droplet
+### Option 1 — Two Different Browsers (Recommended)
 
-- **Image**: Ubuntu 22.04 LTS
-- **Size**: Basic · 1 vCPU · 2 GB RAM ($12/mo) minimum
-- **Region**: Choose closest to your users
-- Enable SSH key auth
+1. Open **Chrome** at https://tic-tac-toe-two-self-80.vercel.app
+2. Open **Firefox** at the same URL
+3. Log in as **"Player1"** in Chrome
+4. Log in as **"Player2"** in Firefox
+5. Click **Find Match** in Chrome → creates a room and waits
+6. Click **Find Match** in Firefox → finds the open room and joins
+7. Game starts — X goes first
+8. Make moves alternately — both browsers update in real time
 
-### Step 2 — Server Setup
+### Option 2 — Normal + Incognito Window
 
-```bash
-# SSH into droplet
-ssh root@YOUR_DROPLET_IP
+1. Open a normal browser tab at the game URL
+2. Open an Incognito / Private window at the same URL
+3. Log in with different usernames in each
+4. Click **Find Match** in both — they will be paired automatically
 
-# Run setup script (installs Docker + UFW)
-curl -o setup.sh https://raw.githubusercontent.com/YOUR_REPO/main/deployment/digitalocean-setup.sh
-bash setup.sh
-```
+### Option 3 — Two Devices
 
-### Step 3 — Deploy Nakama Module
+1. Open the game on your laptop
+2. Open the game on your phone
+3. Log in with different usernames
+4. Click **Find Match** on both devices
 
-```bash
-# On your local machine — build the TypeScript module
-cd nakama
-npm install && npx tsc --build
+### What to Verify
 
-# Upload compiled module and compose file
-scp build/tictactoe.js root@YOUR_DROPLET_IP:/opt/tictactoe/modules/
-scp deployment/docker-compose.prod.yml root@YOUR_DROPLET_IP:/opt/tictactoe/docker-compose.yml
-
-# SSH in and start services
-ssh root@YOUR_DROPLET_IP
-cd /opt/tictactoe
-docker compose up -d
-
-# Watch logs
-docker compose logs -f nakama
-```
-
-### Step 4 — Deploy Frontend
-
-The frontend is a static build — deploy to Vercel or Netlify.
-
-```bash
-cd frontend
-
-# Set production env vars
-cp .env.example .env.production.local
-# Edit: set VITE_NAKAMA_HOST=YOUR_DROPLET_IP
-
-# Build
-npm run build
-
-# Deploy to Vercel
-npx vercel --prod
-
-# OR deploy to Netlify
-npx netlify deploy --prod --dir=dist
-```
-
-### Step 5 — Verify Deployment
-
-```bash
-# Check Nakama is responding
-curl http://YOUR_DROPLET_IP:7350/
-
-# Check module loaded
-docker exec ttt-nakama sh -c "ls /nakama/data/modules/"
-
-# View Nakama console
-# Open http://YOUR_DROPLET_IP:7351 in browser
-```
+| Test | Expected Result |
+|------|----------------|
+| Both players see the same board | Real-time sync via WebSocket |
+| Only current player can click cells | Turn enforcement server-side |
+| Moves appear instantly on both screens | WebSocket broadcast |
+| Win/draw detection | Correct result shown to both |
+| 30-second timer counts down | Visible on both screens |
+| Timer runs out | Turn switches automatically |
+| One player closes tab | Other player wins by forfeit |
+| Leaderboard after game | Wins/losses updated instantly |
 
 ---
 
-## RPC Endpoints
+## ✅ Features Checklist
 
-| RPC | Method | Description |
-|-----|--------|-------------|
-| `find_match` | GET | Finds open match or creates new one |
-| `get_leaderboard` | GET | Returns top 20 players by wins |
+### Core Requirements
+- [x] Server-authoritative game logic
+- [x] Server-side move validation (5 checks per move)
+- [x] Prevent client-side manipulation
+- [x] Real-time state broadcast via WebSocket
+- [x] Auto matchmaking (find or create rooms)
+- [x] Game room isolation (concurrent sessions)
+- [x] Graceful disconnect handling (forfeit win)
+- [x] Responsive UI optimized for mobile
+- [x] Player info and match status display
+- [x] Deployed Nakama server (DigitalOcean)
+- [x] Deployed frontend (Vercel)
 
-Call via REST:
-```
-GET http://YOUR_IP:7350/v2/rpc/find_match
-Authorization: Bearer YOUR_SESSION_TOKEN
-```
-
----
-
-## Leaderboard
-
-The global leaderboard tracks:
-- **Wins** — incremented on win or opponent disconnect
-- **Losses** — incremented on loss
-- **Win Rate** — calculated client-side as `wins / (wins + losses) * 100`
-
-Stored in two Nakama leaderboards:
-- `global_wins` — sorted descending by score
-- `global_losses` — sorted descending by score
+### Bonus Features
+- [x] **Leaderboard** — global rankings with wins, losses, win rate
+- [x] **30-second turn timer** — auto-forfeit on timeout with countdown UI
+- [x] **Multiple concurrent games** — full match isolation
 
 ---
 
-## Design Decisions
+## 📜 License
 
-### Why server-authoritative?
-All game state lives on the server. Clients only send intent (move position). The server validates, applies, and broadcasts. Prevents all client-side cheating.
-
-### Why Nakama?
-- Built-in matchmaking, real-time sockets, leaderboards, auth — no reinventing the wheel
-- TypeScript runtime means type-safe game logic
-- Battle-tested in production games
-
-### Why CockroachDB?
-Nakama's default database. Scales horizontally, handles session and leaderboard persistence out of the box.
-
-### Why device ID auth?
-Frictionless — no email/password needed to play. Device ID is stored in localStorage for session persistence.
+MIT
