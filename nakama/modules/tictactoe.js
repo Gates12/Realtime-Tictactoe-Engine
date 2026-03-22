@@ -1,6 +1,7 @@
 var MODULE_NAME = "tictactoe";
 var TICK_RATE = 1;
 var MAX_PLAYERS = 2;
+var TURN_TIME_LIMIT = 30000; // 30 seconds in ms
 
 var OpCode = {
     GAME_STATE: 1,
@@ -10,6 +11,7 @@ var OpCode = {
     PLAYER_JOINED: 5,
     PLAYER_LEFT: 6,
     WAITING_FOR_OPPONENT: 7,
+    TURN_TIMEOUT: 8,
     MAKE_MOVE: 101
 };
 
@@ -55,6 +57,7 @@ function buildPayload(gs, reason) {
         winner: gs.winner,
         winningLine: gs.winningLine,
         moveCount: gs.moveCount,
+        turnStartTime: gs.turnStartTime,
         reason: reason || null
     });
 }
@@ -79,15 +82,15 @@ function handleMove(logger, nk, dispatcher, gs, message) {
     var result = checkWinner(gs.board);
     if (result.winner) {
         var isXWin = result.winner === "X";
-        var winnerSessionId = isXWin ? gs.playerX : gs.playerO;
-        var loserSessionId = isXWin ? gs.playerO : gs.playerX;
+        var winnerUserId = isXWin ? gs.playerX : gs.playerO;
+        var loserUserId = isXWin ? gs.playerO : gs.playerX;
         var winnerUsername = isXWin ? gs.playerXUsername : gs.playerOUsername;
         var loserUsername = isXWin ? gs.playerOUsername : gs.playerXUsername;
         gs.status = "finished";
-        gs.winner = winnerSessionId;
+        gs.winner = winnerUserId;
         gs.winningLine = result.line;
         dispatcher.broadcastMessage(OpCode.GAME_OVER, buildPayload(gs, "win"), null, null, true);
-        updateLeaderboard(nk, winnerSessionId, winnerUsername, loserSessionId, loserUsername);
+        updateLeaderboard(nk, winnerUserId, winnerUsername, loserUserId, loserUsername);
         return;
     }
     if (isBoardFull(gs.board)) {
@@ -97,10 +100,9 @@ function handleMove(logger, nk, dispatcher, gs, message) {
         return;
     }
     gs.currentTurn = gs.currentTurn === gs.playerX ? gs.playerO : gs.playerX;
+    gs.turnStartTime = Date.now();
     dispatcher.broadcastMessage(OpCode.GAME_STATE, buildPayload(gs, null), null, null, true);
 }
-
-// ── Top-level named match handler functions ──────────────
 
 function matchInit(ctx, logger, nk, params) {
     var state = {
@@ -113,7 +115,8 @@ function matchInit(ctx, logger, nk, params) {
         status: "waiting",
         winner: null,
         winningLine: null,
-        moveCount: 0
+        moveCount: 0,
+        turnStartTime: 0
     };
     logger.info("Match initialized: %s", ctx.matchId);
     return { state: state, tickRate: TICK_RATE, label: JSON.stringify({ open: 1 }) };
@@ -144,6 +147,7 @@ function matchJoin(ctx, logger, nk, dispatcher, tick, state, presences) {
     if (gs.playerX && gs.playerO && gs.status === "waiting") {
         gs.status = "playing";
         gs.currentTurn = gs.playerX;
+        gs.turnStartTime = Date.now();
         dispatcher.matchLabelUpdate(JSON.stringify({ open: 0 }));
         dispatcher.broadcastMessage(OpCode.GAME_STATE, buildPayload(gs, null), null, null, true);
         logger.info("Game started!");
@@ -159,11 +163,10 @@ function matchLeave(ctx, logger, nk, dispatcher, tick, state, presences) {
         var p = presences[i];
         logger.info("Player left: %s", p.username);
         if (gs.status === "playing") {
-            var winnerSessionId = p.userId === gs.playerX ? gs.playerO : gs.playerX;
-            var winnerUserId = winnerSessionId;
-            var winnerUsername = winnerSessionId === gs.playerX ? gs.playerXUsername : gs.playerOUsername;
+            var winnerUserId = p.userId === gs.playerX ? gs.playerO : gs.playerX;
+            var winnerUsername = winnerUserId === gs.playerX ? gs.playerXUsername : gs.playerOUsername;
             gs.status = "finished";
-            gs.winner = winnerSessionId;
+            gs.winner = winnerUserId;
             dispatcher.broadcastMessage(OpCode.GAME_OVER, buildPayload(gs, "opponent_disconnected"), null, null, true);
             updateLeaderboard(nk, winnerUserId, winnerUsername, p.userId, p.username);
         }
@@ -174,6 +177,18 @@ function matchLeave(ctx, logger, nk, dispatcher, tick, state, presences) {
 function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
     var gs = state;
     if (gs.status === "finished") return null;
+
+    // Check 30s turn timeout
+    if (gs.status === "playing" && gs.turnStartTime > 0) {
+        var elapsed = Date.now() - gs.turnStartTime;
+        if (elapsed >= TURN_TIME_LIMIT) {
+            logger.info("Turn timeout for: %s", gs.currentTurn);
+            gs.currentTurn = gs.currentTurn === gs.playerX ? gs.playerO : gs.playerX;
+            gs.turnStartTime = Date.now();
+            dispatcher.broadcastMessage(OpCode.TURN_TIMEOUT, buildPayload(gs, "timeout"), null, null, true);
+        }
+    }
+
     for (var i = 0; i < messages.length; i++) {
         if (messages[i].opCode === OpCode.MAKE_MOVE) {
             handleMove(logger, nk, dispatcher, gs, messages[i]);
@@ -197,7 +212,6 @@ function rpcFindMatch(ctx, logger, nk, payload) {
         if (matches && matches.length > 0) {
             for (var i = 0; i < matches.length; i++) {
                 var m = matches[i];
-                logger.info("Match %s label: %s size: %d", m.matchId, m.label, m.size);
                 try {
                     var label = JSON.parse(m.label);
                     if (label.open === 1 && m.size < 2) {
@@ -254,8 +268,6 @@ function rpcGetLeaderboard(ctx, logger, nk, payload) {
     }
 }
 
-// ── InitModule ────────────────────────────────────────────
-
 function InitModule(ctx, logger, nk, initializer) {
     try {
         nk.leaderboardCreate("global_wins", false, "descending", "increment", undefined, {});
@@ -263,7 +275,6 @@ function InitModule(ctx, logger, nk, initializer) {
     } catch (e) {
         logger.warn("Leaderboards may already exist");
     }
-
     initializer.registerMatch(MODULE_NAME, {
         matchInit: matchInit,
         matchJoinAttempt: matchJoinAttempt,
@@ -273,10 +284,8 @@ function InitModule(ctx, logger, nk, initializer) {
         matchTerminate: matchTerminate,
         matchSignal: matchSignal
     });
-
     initializer.registerRpc("find_match", rpcFindMatch);
     initializer.registerRpc("get_leaderboard", rpcGetLeaderboard);
-
     logger.info("Tic-Tac-Toe module loaded!");
 }
 

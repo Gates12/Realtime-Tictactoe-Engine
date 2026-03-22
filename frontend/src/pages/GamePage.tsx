@@ -4,6 +4,7 @@ import { nakama, OpCode, GameState } from '../lib/nakama'
 import Board from '../components/Board'
 import PlayerCard from '../components/PlayerCard'
 import GameOverModal from '../components/GameOverModal'
+import TurnTimer from '../components/TurnTimer'
 
 type Phase = 'idle' | 'searching' | 'waiting' | 'playing' | 'finished' | 'error'
 
@@ -18,7 +19,6 @@ export default function GamePage() {
 
   useEffect(() => {
     const userId = nakama.session?.user_id
-    console.log('userId:', userId)
     if (userId) setMySessionId(userId)
 
     const socket = nakama.socket
@@ -38,8 +38,6 @@ export default function GamePage() {
         console.error('Failed to parse match data:', e)
       }
 
-      console.log('op_code:', data.op_code, 'payload:', payload)
-
       const op = Number(data.op_code)
       if (op === OpCode.WAITING_FOR_OPPONENT) {
         setPhase('waiting')
@@ -51,6 +49,9 @@ export default function GamePage() {
       } else if (op === OpCode.GAME_OVER) {
         setGameState(payload as GameState)
         setPhase('finished')
+      } else if (op === OpCode.TURN_TIMEOUT) {
+        setGameState(payload as GameState)
+        setPhase('playing')
       }
     }
 
@@ -64,16 +65,12 @@ export default function GamePage() {
     setPhase('searching')
     setErrorMsg('')
     leftRef.current = false
-
     try {
       const matchId = await nakama.findMatch()
-      console.log('Got matchId:', matchId)
       matchIdRef.current = matchId
       await nakama.joinMatch(matchId)
-      console.log('Joined match successfully')
       setPhase('waiting')
     } catch (e: any) {
-      console.error('Matchmaking error:', e)
       setPhase('error')
       setErrorMsg(e?.message || 'Failed to find match')
     }
@@ -210,6 +207,13 @@ export default function GamePage() {
           : <span className="text-muted">Waiting for opponent's move...</span>
         }
       </div>
+
+      {gameState && gameState.turnStartTime > 0 && (
+        <TurnTimer
+          turnStartTime={gameState.turnStartTime}
+          isMyTurn={isMyTurn}
+        />
+      )}
 
       {gameState && (
         <Board board={gameState.board} winningLine={gameState.winningLine}
