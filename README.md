@@ -69,6 +69,8 @@ A production-ready, real-time multiplayer Tic-Tac-Toe game with **server-authori
 │  │  matchLeave       → Handle disconnections        │ │
 │  │  handleMove       → Validate & apply moves       │ │
 │  │  rpcFindMatch     → Auto matchmaking             │ │
+│  │  rpcCreatePrivateRoom → Private room creation    │ │
+│  │  rpcJoinByCode    → Join via room code           │ │
 │  │  rpcGetLeaderboard→ Rankings                     │ │
 │  └─────────────────────────────────────────────────┘ │
 └─────────────────────┬────────────────────────────────┘
@@ -114,6 +116,9 @@ Vercel serves HTTPS. Browsers block mixed content (HTTPS → HTTP). Cloudflare T
 
 **Why Pure ES5 JavaScript for Server Module?**
 Nakama's embedded JS engine (goja) has limited ES6+ support. Pure ES5 ensures maximum compatibility — no shorthand properties or spread operators that cause parser panics.
+
+**Why Room Codes?**
+Allows friends to play together privately without random matchmaking. A 6-character alphanumeric code is generated server-side and stored in the match label for lookup.
 
 ---
 
@@ -163,8 +168,8 @@ tictactoe/
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/tictactoe.git
-cd tictactoe
+git clone https://github.com/Gates12/Realtime-Tictactoe-Engine.git
+cd Realtime-Tictactoe-Engine
 ```
 
 ### 2. Start Nakama Backend (Local)
@@ -289,6 +294,15 @@ systemctl start cloudflared
 cat /var/log/cloudflared.log | grep "trycloudflare.com"
 ```
 
+**Step 5 — Update server module after changes:**
+```bash
+# From local machine
+scp nakama/modules/tictactoe.js root@143.110.176.47:/opt/tictactoe/modules/
+
+# Restart Nakama
+ssh root@143.110.176.47 "docker restart ttt-nakama"
+```
+
 ### Frontend — Vercel
 
 **Step 1 — Build and deploy:**
@@ -309,22 +323,15 @@ Go to: **Project → Settings → Environment Variables**
 | `VITE_NAKAMA_SSL` | `true` |
 | `VITE_NAKAMA_SERVER_KEY` | `defaultkey` |
 
-**Step 3 — Connect GitHub for auto-deploy:**
+**Step 3 — Set Root Directory on Vercel:**
 
-Project → Settings → Git → Connect Repository → select your repo.
+Go to: **Project → Settings → General → Root Directory**  
+Set to: `frontend`
+
+**Step 4 — Connect GitHub for auto-deploy:**
+
+Project → Settings → Git → Connect Repository → select your repo.  
 Every `git push` to `main` automatically redeploys.
-
-**Step 4 — Verify deployment:**
-```bash
-# Nakama API responding
-curl http://143.110.176.47:7350/
-
-# Module loaded
-docker exec ttt-nakama ls /nakama/data/modules/
-
-# Open Nakama console in browser
-# http://143.110.176.47:7351
-```
 
 ---
 
@@ -345,13 +352,21 @@ docker exec ttt-nakama ls /nakama/data/modules/
 
 | RPC ID | Description | Auth Required |
 |--------|-------------|---------------|
-| `find_match` | Find open match or create new one | Session token |
+| `find_match` | Find open public match or create new one | Session token |
+| `create_private_room` | Create a private room with a 6-letter code | Session token |
+| `join_by_code` | Join a private room using its code | Session token |
 | `get_leaderboard` | Return top 20 players by wins | Session token |
 
-**Example REST call:**
+**Example REST calls:**
 ```bash
+# Get leaderboard
 curl http://143.110.176.47:7350/v2/rpc/get_leaderboard \
   -H "Authorization: Bearer YOUR_SESSION_TOKEN"
+
+# Join by room code
+curl http://143.110.176.47:7350/v2/rpc/join_by_code \
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \
+  -d '{"code":"ABC123"}'
 ```
 
 ### Message Protocol (OpCodes)
@@ -388,6 +403,7 @@ curl http://143.110.176.47:7350/v2/rpc/get_leaderboard \
   winningLine: number[] | null,  // e.g. [0, 1, 2]
   moveCount: number,
   turnStartTime: number,         // Unix timestamp ms
+  roomCode: string | null,       // 6-letter code for private rooms
   reason?: string                // "win" | "draw" | "opponent_disconnected" | "timeout"
 }
 ```
@@ -396,30 +412,34 @@ curl http://143.110.176.47:7350/v2/rpc/get_leaderboard \
 
 ## 🧪 How to Test Multiplayer
 
-### Option 1 — Two Different Browsers (Recommended)
+### Option 1 — Quick Match (Two Different Browsers)
 
 1. Open **Chrome** at https://tic-tac-toe-two-self-80.vercel.app
 2. Open **Firefox** at the same URL
-3. Log in as **"Player1"** in Chrome
-4. Log in as **"Player2"** in Firefox
-5. Click **Find Match** in Chrome → creates a room and waits
-6. Click **Find Match** in Firefox → finds the open room and joins
-7. Game starts — X goes first
-8. Make moves alternately — both browsers update in real time
-
-### Option 2 — Normal + Incognito Window
-
-1. Open a normal browser tab at the game URL
-2. Open an Incognito / Private window at the same URL
 3. Log in with different usernames in each
-4. Click **Find Match** in both — they will be paired automatically
+4. Click **⚡ Find Match** in both browsers
+5. Game starts automatically — X goes first
+6. Make moves alternately — both browsers update in real time
 
-### Option 3 — Two Devices
+### Option 2 — Private Room with Code
 
-1. Open the game on your laptop
-2. Open the game on your phone
-3. Log in with different usernames
-4. Click **Find Match** on both devices
+1. Open **Chrome** → log in → click **🔒 Create Private Room**
+2. A **6-letter room code** appears (e.g. `XK9F2A`)
+3. Open **Firefox** → log in → enter the code → click **Join**
+4. Game starts immediately
+
+### Option 3 — Invite Link
+
+1. Create a Private Room in Chrome
+2. Click **📋 Copy Invite Link**
+3. Paste the link in Firefox or send to a friend
+4. Friend opens the link → auto-joins the room instantly
+
+### Option 4 — Two Devices
+
+1. Open the game on your laptop and phone
+2. Log in with different usernames
+3. Use Quick Match or share a room code
 
 ### What to Verify
 
@@ -433,6 +453,9 @@ curl http://143.110.176.47:7350/v2/rpc/get_leaderboard \
 | Timer runs out | Turn switches automatically |
 | One player closes tab | Other player wins by forfeit |
 | Leaderboard after game | Wins/losses updated instantly |
+| Room code join | Second player joins correct room |
+| Invite link | Auto-joins room from URL |
+| Mobile layout | Responsive on phone screen |
 
 ---
 
@@ -455,5 +478,8 @@ curl http://143.110.176.47:7350/v2/rpc/get_leaderboard \
 - [x] **Leaderboard** — global rankings with wins, losses, win rate
 - [x] **30-second turn timer** — auto-forfeit on timeout with countdown UI
 - [x] **Multiple concurrent games** — full match isolation
+- [x] **Private Room Codes** — 6-letter codes to play with friends
+- [x] **Invite Links** — shareable URLs that auto-join a room
+- [x] **Mobile Responsive** — optimized for phones and tablets
 
 ---
