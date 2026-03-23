@@ -1,5 +1,11 @@
 # 🎮 TicTacToe — Real-Time Multiplayer
 
+> Built something fun over the past few weeks — a real-time multiplayer Tic-Tac-Toe game that you can play with anyone, anywhere.
+>
+> The idea was simple. Sometimes you just want to kill a few minutes — waiting for a meeting to start, sitting in a long queue, or just taking a break from work. Most games need you to download an app or create an account. This one you just open in your browser, type a username, and you are in.
+>
+> You can either get matched with a random player instantly or send a private room link to a friend and play together. If no one is around, a bot joins automatically after 15 seconds so you are never just staring at a waiting screen.
+
 A production-ready, real-time multiplayer Tic-Tac-Toe game with **server-authoritative architecture** using Nakama as the game backend infrastructure. Supports human vs human matchmaking and **solo play against a bot**.
 
 > **Live Demo:** https://tic-tac-toe-two-self-80.vercel.app  
