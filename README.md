@@ -8,9 +8,9 @@
 
 A production-ready, real-time multiplayer Tic-Tac-Toe game with **server-authoritative architecture** using Nakama as the game backend infrastructure. Supports human vs human matchmaking and **solo play against a bot**.
 
-> **Live Demo:** https://www.tic-tac-toe.space
-> **Nakama Server:** http://143.110.176.47:7350  
-> **Nakama Console:** http://143.110.176.47:7351 (admin / password)
+**Live Demo:** https://www.tic-tac-toe.space  
+**Nakama Server:** http://143.110.176.47:7350  
+**Nakama Console:** http://143.110.176.47:7351 (admin / password)
 
 ---
 
