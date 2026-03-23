@@ -1,7 +1,7 @@
 var MODULE_NAME = "tictactoe";
 var TICK_RATE = 1;
 var MAX_PLAYERS = 2;
-var TURN_TIME_LIMIT = 30000; // 30 seconds in ms
+var TURN_TIME_LIMIT = 30000;
 
 var OpCode = {
     GAME_STATE: 1,
@@ -58,6 +58,7 @@ function buildPayload(gs, reason) {
         winningLine: gs.winningLine,
         moveCount: gs.moveCount,
         turnStartTime: gs.turnStartTime,
+        roomCode: gs.roomCode,
         reason: reason || null
     });
 }
@@ -104,7 +105,10 @@ function handleMove(logger, nk, dispatcher, gs, message) {
     dispatcher.broadcastMessage(OpCode.GAME_STATE, buildPayload(gs, null), null, null, true);
 }
 
+// ── Match Handlers ────────────────────────────────────
+
 function matchInit(ctx, logger, nk, params) {
+    var roomCode = (params && params.code) ? params.code : null;
     var state = {
         board: [null,null,null,null,null,null,null,null,null],
         currentTurn: "",
@@ -116,10 +120,13 @@ function matchInit(ctx, logger, nk, params) {
         winner: null,
         winningLine: null,
         moveCount: 0,
-        turnStartTime: 0
+        turnStartTime: 0,
+        roomCode: roomCode
     };
-    logger.info("Match initialized: %s", ctx.matchId);
-    return { state: state, tickRate: TICK_RATE, label: JSON.stringify({ open: 1 }) };
+    var label = { open: 1 };
+    if (roomCode) label.code = roomCode;
+    logger.info("Match initialized: %s code: %s", ctx.matchId, roomCode || "none");
+    return { state: state, tickRate: TICK_RATE, label: JSON.stringify(label) };
 }
 
 function matchJoinAttempt(ctx, logger, nk, dispatcher, tick, state, presence, metadata) {
@@ -148,7 +155,7 @@ function matchJoin(ctx, logger, nk, dispatcher, tick, state, presences) {
         gs.status = "playing";
         gs.currentTurn = gs.playerX;
         gs.turnStartTime = Date.now();
-        dispatcher.matchLabelUpdate(JSON.stringify({ open: 0 }));
+        dispatcher.matchLabelUpdate(JSON.stringify({ open: 0, code: gs.roomCode }));
         dispatcher.broadcastMessage(OpCode.GAME_STATE, buildPayload(gs, null), null, null, true);
         logger.info("Game started!");
     } else if (gs.status === "waiting") {
@@ -177,8 +184,6 @@ function matchLeave(ctx, logger, nk, dispatcher, tick, state, presences) {
 function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
     var gs = state;
     if (gs.status === "finished") return null;
-
-    // Check 30s turn timeout
     if (gs.status === "playing" && gs.turnStartTime > 0) {
         var elapsed = Date.now() - gs.turnStartTime;
         if (elapsed >= TURN_TIME_LIMIT) {
@@ -188,7 +193,6 @@ function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
             dispatcher.broadcastMessage(OpCode.TURN_TIMEOUT, buildPayload(gs, "timeout"), null, null, true);
         }
     }
-
     for (var i = 0; i < messages.length; i++) {
         if (messages[i].opCode === OpCode.MAKE_MOVE) {
             handleMove(logger, nk, dispatcher, gs, messages[i]);
@@ -205,6 +209,17 @@ function matchSignal(ctx, logger, nk, dispatcher, tick, state, data) {
     return { state: state };
 }
 
+// ── RPC Functions ─────────────────────────────────────
+
+function generateRoomCode() {
+    var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    var code = '';
+    for (var i = 0; i < 6; i++) {
+        code += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return code;
+}
+
 function rpcFindMatch(ctx, logger, nk, payload) {
     try {
         var matches = nk.matchList(10, true, null, 0, 1, null);
@@ -214,7 +229,7 @@ function rpcFindMatch(ctx, logger, nk, payload) {
                 var m = matches[i];
                 try {
                     var label = JSON.parse(m.label);
-                    if (label.open === 1 && m.size < 2) {
+                    if (label.open === 1 && !label.code && m.size < 2) {
                         logger.info("Found open match: %s", m.matchId);
                         return JSON.stringify({ matchId: m.matchId });
                     }
@@ -227,6 +242,44 @@ function rpcFindMatch(ctx, logger, nk, payload) {
     var matchId = nk.matchCreate(MODULE_NAME, {});
     logger.info("Created new match: %s", matchId);
     return JSON.stringify({ matchId: matchId });
+}
+
+function rpcCreatePrivateRoom(ctx, logger, nk, payload) {
+    var code = generateRoomCode();
+    var matchId = nk.matchCreate(MODULE_NAME, { code: code });
+    logger.info("Created private room: %s code: %s", matchId, code);
+    return JSON.stringify({ matchId: matchId, code: code });
+}
+
+function rpcJoinByCode(ctx, logger, nk, payload) {
+    var data;
+    try {
+        data = JSON.parse(payload);
+    } catch(e) {
+        return JSON.stringify({ error: "Invalid payload" });
+    }
+    var code = (data.code || '').toString().toUpperCase().trim();
+    if (!code || code.length !== 6) {
+        return JSON.stringify({ error: "Invalid room code" });
+    }
+    try {
+        var matches = nk.matchList(50, true, null, 0, 2, null);
+        if (matches && matches.length > 0) {
+            for (var i = 0; i < matches.length; i++) {
+                var m = matches[i];
+                try {
+                    var label = JSON.parse(m.label);
+                    if (label.code === code && m.size < 2) {
+                        logger.info("Found room by code: %s -> %s", code, m.matchId);
+                        return JSON.stringify({ matchId: m.matchId });
+                    }
+                } catch(e) {}
+            }
+        }
+    } catch(e) {
+        logger.error("join_by_code error: %v", e);
+    }
+    return JSON.stringify({ error: "Room not found or already full" });
 }
 
 function rpcGetLeaderboard(ctx, logger, nk, payload) {
@@ -268,6 +321,8 @@ function rpcGetLeaderboard(ctx, logger, nk, payload) {
     }
 }
 
+// ── InitModule ────────────────────────────────────────
+
 function InitModule(ctx, logger, nk, initializer) {
     try {
         nk.leaderboardCreate("global_wins", false, "descending", "increment", undefined, {});
@@ -285,6 +340,8 @@ function InitModule(ctx, logger, nk, initializer) {
         matchSignal: matchSignal
     });
     initializer.registerRpc("find_match", rpcFindMatch);
+    initializer.registerRpc("create_private_room", rpcCreatePrivateRoom);
+    initializer.registerRpc("join_by_code", rpcJoinByCode);
     initializer.registerRpc("get_leaderboard", rpcGetLeaderboard);
     logger.info("Tic-Tac-Toe module loaded!");
 }

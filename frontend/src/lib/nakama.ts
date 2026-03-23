@@ -64,14 +64,30 @@ class NakamaClient {
 
   async findMatch(): Promise<string> {
     if (!this.session) throw new Error('Not authenticated');
-    const result = await this.client.rpc(this.session, 'find_match', null);
+    const result = await this.client.rpc(this.session, 'find_match', {});
     const data = typeof result.payload === 'string' ? JSON.parse(result.payload) : result.payload;
+    return data.matchId;
+  }
+
+  async createPrivateRoom(): Promise<{ matchId: string; code: string }> {
+    if (!this.session) throw new Error('Not authenticated');
+    const result = await this.client.rpc(this.session, 'create_private_room', {});
+    const data = typeof result.payload === 'string' ? JSON.parse(result.payload) : result.payload;
+    if (data.error) throw new Error(data.error);
+    return data;
+  }
+  
+  async joinByCode(code: string): Promise<string> {
+    if (!this.session) throw new Error('Not authenticated');
+    const result = await this.client.rpc(this.session, 'join_by_code', { code: code.toUpperCase() });
+    const data = typeof result.payload === 'string' ? JSON.parse(result.payload) : result.payload;
+    if (data.error) throw new Error(data.error);
     return data.matchId;
   }
 
   async getLeaderboard(): Promise<LeaderboardEntry[]> {
     if (!this.session) throw new Error('Not authenticated');
-    const result = await this.client.rpc(this.session, 'get_leaderboard', null);
+    const result = await this.client.rpc(this.session, 'get_leaderboard', {});
     const data = typeof result.payload === 'string' ? JSON.parse(result.payload) : result.payload;
     return data.leaderboard || [];
   }

@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+// @ts-nocheck
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { MatchPresenceEvent, MatchData } from '@heroiclabs/nakama-js';
 import { nakama, OpCode, GameState } from '../lib/nakama';

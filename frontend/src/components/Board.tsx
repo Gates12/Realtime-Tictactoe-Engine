@@ -24,7 +24,7 @@ export default function Board({ board, winningLine, isMyTurn, disabled, onCellCl
               key={index}
               onClick={() => clickable && onCellClick(index)}
               disabled={!clickable}
-              className={`cell-btn h-24 sm:h-28
+              className={`cell-btn h-20 sm:h-24 md:h-28
                 ${winning ? 'cell-winning' : ''}
                 ${cell === 'X' ? 'cell-x' : ''}
                 ${cell === 'O' ? 'cell-o' : ''}

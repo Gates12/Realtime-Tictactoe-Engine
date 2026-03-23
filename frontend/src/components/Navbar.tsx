@@ -15,11 +15,12 @@ export default function Navbar() {
     <header className="border-b border-border bg-surface/80 backdrop-blur-sm sticky top-0 z-50">
       <div className="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
         {/* Logo */}
-        <NavLink to="/" className="flex items-center gap-2 group">
+        <NavLink to="/" className="flex items-center gap-1.5 group shrink-0">
           <span className="font-display text-xl text-x leading-none">X</span>
           <span className="font-display text-xl text-muted leading-none">/</span>
           <span className="font-display text-xl text-o leading-none">O</span>
-          <span className="font-display text-lg tracking-widest text-white ml-1 uppercase group-hover:text-glow transition-colors">
+          <span className="font-display text-base tracking-widest text-white ml-1 uppercase
+                           group-hover:text-glow transition-colors hidden sm:block">
             TicTacToe
           </span>
         </NavLink>
@@ -30,7 +31,7 @@ export default function Navbar() {
             to="/"
             end
             className={({ isActive }) =>
-              `px-3 py-1.5 rounded-lg text-sm font-body transition-colors ${
+              `px-2.5 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-body transition-colors ${
                 isActive ? 'text-white bg-card' : 'text-muted hover:text-white'
               }`
             }
@@ -40,7 +41,7 @@ export default function Navbar() {
           <NavLink
             to="/leaderboard"
             className={({ isActive }) =>
-              `px-3 py-1.5 rounded-lg text-sm font-body transition-colors ${
+              `px-2.5 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-body transition-colors ${
                 isActive ? 'text-white bg-card' : 'text-muted hover:text-white'
               }`
             }
@@ -50,14 +51,16 @@ export default function Navbar() {
         </nav>
 
         {/* User */}
-        <div className="flex items-center gap-3">
-          <div className="hidden sm:flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-o animate-pulse" />
-            <span className="text-sm font-mono text-muted">{username}</span>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-o animate-pulse shrink-0" />
+            <span className="text-xs font-mono text-muted truncate max-w-[60px] sm:max-w-[120px]">
+              {username}
+            </span>
           </div>
           <button
             onClick={handleLogout}
-            className="text-xs text-muted hover:text-x font-body transition-colors px-2 py-1"
+            className="text-xs text-muted hover:text-x font-body transition-colors px-2 py-1 shrink-0"
           >
             Leave
           </button>

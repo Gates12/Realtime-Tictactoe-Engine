@@ -97,3 +97,19 @@ body::before {
 ::-webkit-scrollbar-track { background: #12121a; }
 ::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #4d3fd4; }
+
+/* Mobile touch improvements */
+@media (max-width: 640px) {
+  .btn-primary, .btn-ghost {
+    min-height: 44px;
+  }
+  
+  input[type="text"] {
+    font-size: 16px; /* Prevents iOS zoom on focus */
+  }
+}
+
+/* Full height on mobile browsers */
+.min-h-screen {
+  min-height: 100dvh;
+}
