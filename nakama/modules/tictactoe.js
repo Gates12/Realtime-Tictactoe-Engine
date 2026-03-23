@@ -2,6 +2,10 @@ var MODULE_NAME = "tictactoe";
 var TICK_RATE = 1;
 var MAX_PLAYERS = 2;
 var TURN_TIME_LIMIT = 30000;
+var BOT_WAIT_TICKS = 15;   // seconds before bot joins if no human opponent
+var BOT_MOVE_DELAY = 2;    // seconds bot "thinks" before making a move
+var BOT_USER_ID = "bot-player-001";
+var BOT_USERNAME = "🤖 Bot";
 
 var OpCode = {
     GAME_STATE: 1,
@@ -38,7 +42,64 @@ function isBoardFull(board) {
     return true;
 }
 
+// ── Bot AI (medium difficulty) ────────────────────────
+
+function findWinningMove(board, symbol) {
+    for (var i = 0; i < WIN_LINES.length; i++) {
+        var line = WIN_LINES[i];
+        var a = board[line[0]], b = board[line[1]], c = board[line[2]];
+        var cells = [a, b, c];
+        var symCount = 0, nullIdx = -1;
+        for (var j = 0; j < 3; j++) {
+            if (cells[j] === symbol) symCount++;
+            else if (cells[j] === null) nullIdx = j;
+        }
+        if (symCount === 2 && nullIdx !== -1) {
+            return line[nullIdx];
+        }
+    }
+    return -1;
+}
+
+function makeBotMove(board, botSymbol, opponentSymbol) {
+    // 1. Win if possible
+    var win = findWinningMove(board, botSymbol);
+    if (win !== -1) return win;
+
+    // 2. Block opponent's winning move
+    var block = findWinningMove(board, opponentSymbol);
+    if (block !== -1) return block;
+
+    // 3. Take center
+    if (board[4] === null) return 4;
+
+    // 4. Take a corner
+    var corners = [0, 2, 6, 8];
+    var freeCorners = [];
+    for (var i = 0; i < corners.length; i++) {
+        if (board[corners[i]] === null) freeCorners.push(corners[i]);
+    }
+    if (freeCorners.length > 0) {
+        return freeCorners[Math.floor(Math.random() * freeCorners.length)];
+    }
+
+    // 5. Take any empty cell
+    var empty = [];
+    for (var i = 0; i < 9; i++) {
+        if (board[i] === null) empty.push(i);
+    }
+    if (empty.length > 0) {
+        return empty[Math.floor(Math.random() * empty.length)];
+    }
+
+    return -1;
+}
+
+// ── Leaderboard & Helpers ─────────────────────────────
+
 function updateLeaderboard(nk, winnerUserId, winnerUsername, loserUserId, loserUsername) {
+    // Don't record leaderboard entries for bot games
+    if (winnerUserId === BOT_USER_ID || loserUserId === BOT_USER_ID) return;
     try {
         nk.leaderboardRecordWrite("global_wins", winnerUserId, winnerUsername, 1, 0, {});
         nk.leaderboardRecordWrite("global_losses", loserUserId, loserUsername, 1, 0, {});
@@ -59,7 +120,8 @@ function buildPayload(gs, reason) {
         moveCount: gs.moveCount,
         turnStartTime: gs.turnStartTime,
         roomCode: gs.roomCode,
-        reason: reason || null
+        reason: reason || null,
+        isBot: gs.isBot || false
     });
 }
 
@@ -76,10 +138,12 @@ function handleMove(logger, nk, dispatcher, gs, message) {
     var position = moveData.position;
     if (position === undefined || position < 0 || position > 8) { reject("Invalid position"); return; }
     if (gs.board[position] !== null) { reject("Cell already occupied"); return; }
+
     var symbol = message.sender.userId === gs.playerX ? "X" : "O";
     gs.board[position] = symbol;
     gs.moveCount++;
     logger.info("Move: %s at %d", symbol, position);
+
     var result = checkWinner(gs.board);
     if (result.winner) {
         var isXWin = result.winner === "X";
@@ -100,8 +164,56 @@ function handleMove(logger, nk, dispatcher, gs, message) {
         dispatcher.broadcastMessage(OpCode.GAME_OVER, buildPayload(gs, "draw"), null, null, true);
         return;
     }
+
     gs.currentTurn = gs.currentTurn === gs.playerX ? gs.playerO : gs.playerX;
     gs.turnStartTime = Date.now();
+
+    // If it's now the bot's turn, schedule the bot move
+    if (gs.isBot && gs.currentTurn === BOT_USER_ID) {
+        gs.botMoveScheduledAt = Date.now();
+    }
+
+    dispatcher.broadcastMessage(OpCode.GAME_STATE, buildPayload(gs, null), null, null, true);
+}
+
+// ── Bot Move Execution ────────────────────────────────
+
+function executeBotMove(logger, nk, dispatcher, gs) {
+    var botSymbol = gs.playerO === BOT_USER_ID ? "O" : "X";
+    var opponentSymbol = botSymbol === "O" ? "X" : "O";
+    var position = makeBotMove(gs.board, botSymbol, opponentSymbol);
+
+    if (position === -1) return; // no moves left (shouldn't happen)
+
+    gs.board[position] = botSymbol;
+    gs.moveCount++;
+    logger.info("Bot move: %s at %d", botSymbol, position);
+
+    var result = checkWinner(gs.board);
+    if (result.winner) {
+        var botWon = result.winner === botSymbol;
+        var winnerUserId = botWon ? BOT_USER_ID : (gs.playerX === BOT_USER_ID ? gs.playerO : gs.playerX);
+        var loserUserId = botWon ? (gs.playerX === BOT_USER_ID ? gs.playerO : gs.playerX) : BOT_USER_ID;
+        var winnerUsername = botWon ? BOT_USERNAME : (gs.playerX === BOT_USER_ID ? gs.playerOUsername : gs.playerXUsername);
+        var loserUsername = botWon ? (gs.playerX === BOT_USER_ID ? gs.playerOUsername : gs.playerXUsername) : BOT_USERNAME;
+        gs.status = "finished";
+        gs.winner = winnerUserId;
+        gs.winningLine = result.line;
+        dispatcher.broadcastMessage(OpCode.GAME_OVER, buildPayload(gs, "win"), null, null, true);
+        updateLeaderboard(nk, winnerUserId, winnerUsername, loserUserId, loserUsername);
+        return;
+    }
+    if (isBoardFull(gs.board)) {
+        gs.status = "finished";
+        gs.winner = "draw";
+        dispatcher.broadcastMessage(OpCode.GAME_OVER, buildPayload(gs, "draw"), null, null, true);
+        return;
+    }
+
+    // Switch back to human
+    gs.currentTurn = gs.playerX === BOT_USER_ID ? gs.playerO : gs.playerX;
+    gs.turnStartTime = Date.now();
+    gs.botMoveScheduledAt = 0;
     dispatcher.broadcastMessage(OpCode.GAME_STATE, buildPayload(gs, null), null, null, true);
 }
 
@@ -121,7 +233,12 @@ function matchInit(ctx, logger, nk, params) {
         winningLine: null,
         moveCount: 0,
         turnStartTime: 0,
-        roomCode: roomCode
+        roomCode: roomCode,
+        // Bot fields
+        isBot: false,
+        botMoveScheduledAt: 0,
+        waitingTicks: 0,       // counts ticks since first player joined
+        isPrivate: roomCode ? true : false
     };
     var label = { open: 1 };
     if (roomCode) label.code = roomCode;
@@ -133,7 +250,10 @@ function matchJoinAttempt(ctx, logger, nk, dispatcher, tick, state, presence, me
     var gs = state;
     if (gs.status === "finished") return { state: state, accept: false, rejectMessage: "Match already finished" };
     var count = (gs.playerX ? 1 : 0) + (gs.playerO ? 1 : 0);
-    if (count >= MAX_PLAYERS) return { state: state, accept: false, rejectMessage: "Match is full" };
+    // Allow bot slot (bot is not a real presence)
+    if (count >= MAX_PLAYERS && !gs.isBot) return { state: state, accept: false, rejectMessage: "Match is full" };
+    // If bot already joined, only allow if it's replacing the bot (second human wants to join a bot game — not supported)
+    if (gs.isBot && gs.playerO === BOT_USER_ID) return { state: state, accept: false, rejectMessage: "Playing with bot" };
     return { state: state, accept: true };
 }
 
@@ -144,6 +264,7 @@ function matchJoin(ctx, logger, nk, dispatcher, tick, state, presences) {
         if (!gs.playerX) {
             gs.playerX = p.userId;
             gs.playerXUsername = p.username;
+            gs.waitingTicks = 0; // start counting
             logger.info("Player X: %s", p.username);
         } else if (!gs.playerO) {
             gs.playerO = p.userId;
@@ -170,12 +291,19 @@ function matchLeave(ctx, logger, nk, dispatcher, tick, state, presences) {
         var p = presences[i];
         logger.info("Player left: %s", p.username);
         if (gs.status === "playing") {
-            var winnerUserId = p.userId === gs.playerX ? gs.playerO : gs.playerX;
-            var winnerUsername = winnerUserId === gs.playerX ? gs.playerXUsername : gs.playerOUsername;
-            gs.status = "finished";
-            gs.winner = winnerUserId;
-            dispatcher.broadcastMessage(OpCode.GAME_OVER, buildPayload(gs, "opponent_disconnected"), null, null, true);
-            updateLeaderboard(nk, winnerUserId, winnerUsername, p.userId, p.username);
+            // If playing vs bot, just end the game — no forfeit awarded
+            if (gs.isBot) {
+                gs.status = "finished";
+                gs.winner = null;
+                dispatcher.broadcastMessage(OpCode.GAME_OVER, buildPayload(gs, "opponent_disconnected"), null, null, true);
+            } else {
+                var winnerUserId = p.userId === gs.playerX ? gs.playerO : gs.playerX;
+                var winnerUsername = winnerUserId === gs.playerX ? gs.playerXUsername : gs.playerOUsername;
+                gs.status = "finished";
+                gs.winner = winnerUserId;
+                dispatcher.broadcastMessage(OpCode.GAME_OVER, buildPayload(gs, "opponent_disconnected"), null, null, true);
+                updateLeaderboard(nk, winnerUserId, winnerUsername, p.userId, p.username);
+            }
         }
     }
     return { state: gs };
@@ -184,20 +312,57 @@ function matchLeave(ctx, logger, nk, dispatcher, tick, state, presences) {
 function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
     var gs = state;
     if (gs.status === "finished") return null;
-    if (gs.status === "playing" && gs.turnStartTime > 0) {
-        var elapsed = Date.now() - gs.turnStartTime;
-        if (elapsed >= TURN_TIME_LIMIT) {
-            logger.info("Turn timeout for: %s", gs.currentTurn);
-            gs.currentTurn = gs.currentTurn === gs.playerX ? gs.playerO : gs.playerX;
+
+    // ── Bot join logic: count ticks while waiting for second player ──
+    if (gs.status === "waiting" && gs.playerX && !gs.isPrivate) {
+        gs.waitingTicks++;
+        if (gs.waitingTicks >= BOT_WAIT_TICKS) {
+            // Spawn bot as Player O
+            gs.playerO = BOT_USER_ID;
+            gs.playerOUsername = BOT_USERNAME;
+            gs.isBot = true;
+            gs.status = "playing";
+            gs.currentTurn = gs.playerX;
             gs.turnStartTime = Date.now();
-            dispatcher.broadcastMessage(OpCode.TURN_TIMEOUT, buildPayload(gs, "timeout"), null, null, true);
+            dispatcher.matchLabelUpdate(JSON.stringify({ open: 0, code: gs.roomCode }));
+            dispatcher.broadcastMessage(OpCode.GAME_STATE, buildPayload(gs, null), null, null, true);
+            logger.info("Bot joined match as Player O after %d seconds", gs.waitingTicks);
         }
     }
+
+    // ── Turn timeout (applies to human turns only) ───────────────────
+    if (gs.status === "playing" && gs.turnStartTime > 0) {
+        var isBotTurn = gs.isBot && gs.currentTurn === BOT_USER_ID;
+        if (!isBotTurn) {
+            var elapsed = Date.now() - gs.turnStartTime;
+            if (elapsed >= TURN_TIME_LIMIT) {
+                logger.info("Turn timeout for: %s", gs.currentTurn);
+                gs.currentTurn = gs.currentTurn === gs.playerX ? gs.playerO : gs.playerX;
+                gs.turnStartTime = Date.now();
+                // If it's now bot's turn after timeout, schedule bot move
+                if (gs.isBot && gs.currentTurn === BOT_USER_ID) {
+                    gs.botMoveScheduledAt = Date.now();
+                }
+                dispatcher.broadcastMessage(OpCode.TURN_TIMEOUT, buildPayload(gs, "timeout"), null, null, true);
+            }
+        }
+    }
+
+    // ── Bot move execution with delay ────────────────────────────────
+    if (gs.isBot && gs.status === "playing" && gs.currentTurn === BOT_USER_ID && gs.botMoveScheduledAt > 0) {
+        var botElapsed = Date.now() - gs.botMoveScheduledAt;
+        if (botElapsed >= BOT_MOVE_DELAY * 1000) {
+            executeBotMove(logger, nk, dispatcher, gs);
+        }
+    }
+
+    // ── Process human messages ───────────────────────────────────────
     for (var i = 0; i < messages.length; i++) {
         if (messages[i].opCode === OpCode.MAKE_MOVE) {
             handleMove(logger, nk, dispatcher, gs, messages[i]);
         }
     }
+
     return { state: gs };
 }
 
@@ -343,7 +508,7 @@ function InitModule(ctx, logger, nk, initializer) {
     initializer.registerRpc("create_private_room", rpcCreatePrivateRoom);
     initializer.registerRpc("join_by_code", rpcJoinByCode);
     initializer.registerRpc("get_leaderboard", rpcGetLeaderboard);
-    logger.info("Tic-Tac-Toe module loaded!");
+    logger.info("Tic-Tac-Toe module loaded (bot support enabled)!");
 }
 
 globalThis.InitModule = InitModule;
