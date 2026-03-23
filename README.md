@@ -1,6 +1,6 @@
 # 🎮 TicTacToe — Real-Time Multiplayer
 
-A production-ready, real-time multiplayer Tic-Tac-Toe game with **server-authoritative architecture** using Nakama as the game backend infrastructure.
+A production-ready, real-time multiplayer Tic-Tac-Toe game with **server-authoritative architecture** using Nakama as the game backend infrastructure. Supports human vs human matchmaking and **solo play against a bot**.
 
 > **Live Demo:** https://tic-tac-toe-two-self-80.vercel.app  
 > **Nakama Server:** http://143.110.176.47:7350  
@@ -65,9 +65,10 @@ A production-ready, real-time multiplayer Tic-Tac-Toe game with **server-authori
 │  │  matchInit        → Initialize empty board       │ │
 │  │  matchJoinAttempt → Validate join requests       │ │
 │  │  matchJoin        → Assign X/O, start game       │ │
-│  │  matchLoop        → Check 30s turn timer         │ │
+│  │  matchLoop        → Turn timer + bot AI logic    │ │
 │  │  matchLeave       → Handle disconnections        │ │
 │  │  handleMove       → Validate & apply moves       │ │
+│  │  executeBotMove   → Bot AI move execution        │ │
 │  │  rpcFindMatch     → Auto matchmaking             │ │
 │  │  rpcCreatePrivateRoom → Private room creation    │ │
 │  │  rpcJoinByCode    → Join via room code           │ │
@@ -83,7 +84,7 @@ A production-ready, real-time multiplayer Tic-Tac-Toe game with **server-authori
 
 ### Server-Authoritative Design
 
-All game logic runs **exclusively on the Nakama server**. The client only sends player intent — the server validates, applies, and broadcasts results.
+All game logic runs **exclusively on the Nakama server**. The client only sends player intent — the server validates, applies, and broadcasts results. This applies to both human and bot moves.
 
 **Client only sends:**
 ```json
@@ -98,7 +99,20 @@ All game logic runs **exclusively on the Nakama server**. The client only sends 
 - ✅ Cell is empty
 - ✅ Turn timer has not expired (30 seconds)
 
-If any check fails → server sends `MOVE_REJECTED` → board does not change. This prevents all forms of client-side cheating.
+If any check fails → server sends `MOVE_REJECTED` → board does not change.
+
+### Bot System
+
+When a player uses **Find Match** and no human opponent joins within **15 seconds**, the server automatically spawns a bot as Player O.
+
+**Bot behavior:**
+- Waits **2 seconds** before each move (feels natural, not instant)
+- Uses **medium difficulty AI**: win if possible → block opponent's win → take center → take a corner → random empty cell
+- Bot games are **excluded from the leaderboard** to keep rankings clean
+- Bot only joins **public matchmaking** — private rooms are never assigned a bot
+- The game state includes `isBot: true` so the frontend can display a 🤖 indicator
+
+**Bot is entirely server-side** — no client changes required. The same WebSocket protocol is used; the bot just generates moves inside `matchLoop`.
 
 ### Key Design Decisions
 
@@ -120,6 +134,9 @@ Nakama's embedded JS engine (goja) has limited ES6+ support. Pure ES5 ensures ma
 **Why Room Codes?**
 Allows friends to play together privately without random matchmaking. A 6-character alphanumeric code is generated server-side and stored in the match label for lookup.
 
+**Why server-side bot AI?**
+Keeps the architecture fully server-authoritative. The bot runs inside `matchLoop` just like any other game logic — the client has no knowledge of or control over bot behavior.
+
 ---
 
 ## 📁 Project Structure
@@ -128,7 +145,7 @@ Allows friends to play together privately without random matchmaking. A 6-charac
 tictactoe/
 ├── nakama/
 │   ├── modules/
-│   │   └── tictactoe.js        # Server game logic (pure ES5 JS)
+│   │   └── tictactoe.js        # Server game logic + bot AI (pure ES5 JS)
 │   ├── docker-compose.yml      # Local dev (Nakama + CockroachDB)
 │   ├── package.json
 │   └── tsconfig.json
@@ -299,8 +316,8 @@ cat /var/log/cloudflared.log | grep "trycloudflare.com"
 # From local machine
 scp nakama/modules/tictactoe.js root@143.110.176.47:/opt/tictactoe/modules/
 
-# Restart Nakama
-ssh root@143.110.176.47 "docker restart ttt-nakama"
+# Restart Nakama (check your service name first with: docker compose ps)
+ssh root@143.110.176.47 "cd /opt/tictactoe && docker compose restart nakama"
 ```
 
 ### Frontend — Vercel
@@ -397,13 +414,14 @@ curl http://143.110.176.47:7350/v2/rpc/join_by_code \
   playerX: string,               // userId of X player
   playerO: string,               // userId of O player
   playerXUsername: string,
-  playerOUsername: string,
+  playerOUsername: string,       // "🤖 Bot" when playing vs bot
   status: "waiting" | "playing" | "finished",
   winner: string | null,         // userId or "draw"
   winningLine: number[] | null,  // e.g. [0, 1, 2]
   moveCount: number,
   turnStartTime: number,         // Unix timestamp ms
   roomCode: string | null,       // 6-letter code for private rooms
+  isBot: boolean,                // true when opponent is the bot
   reason?: string                // "win" | "draw" | "opponent_disconnected" | "timeout"
 }
 ```
@@ -419,23 +437,30 @@ curl http://143.110.176.47:7350/v2/rpc/join_by_code \
 3. Log in with different usernames in each
 4. Click **⚡ Find Match** in both browsers
 5. Game starts automatically — X goes first
-6. Make moves alternately — both browsers update in real time
 
-### Option 2 — Private Room with Code
+### Option 2 — Play vs Bot (Solo)
+
+1. Open the game and log in
+2. Click **⚡ Find Match**
+3. Wait **15 seconds** — if no human joins, a 🤖 Bot joins automatically
+4. Play as normal — the bot responds within ~2 seconds per move
+5. Bot games do **not** affect your leaderboard stats
+
+### Option 3 — Private Room with Code
 
 1. Open **Chrome** → log in → click **🔒 Create Private Room**
 2. A **6-letter room code** appears (e.g. `XK9F2A`)
 3. Open **Firefox** → log in → enter the code → click **Join**
-4. Game starts immediately
+4. Game starts immediately *(bot never joins private rooms)*
 
-### Option 3 — Invite Link
+### Option 4 — Invite Link
 
 1. Create a Private Room in Chrome
 2. Click **📋 Copy Invite Link**
 3. Paste the link in Firefox or send to a friend
 4. Friend opens the link → auto-joins the room instantly
 
-### Option 4 — Two Devices
+### Option 5 — Two Devices
 
 1. Open the game on your laptop and phone
 2. Log in with different usernames
@@ -455,6 +480,9 @@ curl http://143.110.176.47:7350/v2/rpc/join_by_code \
 | Leaderboard after game | Wins/losses updated instantly |
 | Room code join | Second player joins correct room |
 | Invite link | Auto-joins room from URL |
+| No opponent after 15s | Bot joins automatically |
+| Bot makes moves | Responds within ~2 seconds |
+| Bot game ends | Leaderboard unchanged |
 | Mobile layout | Responsive on phone screen |
 
 ---
@@ -475,11 +503,10 @@ curl http://143.110.176.47:7350/v2/rpc/join_by_code \
 - [x] Deployed frontend (Vercel)
 
 ### Bonus Features
-- [x] **Leaderboard** — global rankings with wins, losses, win rate
+- [x] **Bot opponent** — auto-joins after 15s if no human found; medium difficulty AI (win → block → center → corner → random); runs entirely server-side
+- [x] **Leaderboard** — global rankings with wins, losses, win rate (bot games excluded)
 - [x] **30-second turn timer** — auto-forfeit on timeout with countdown UI
 - [x] **Multiple concurrent games** — full match isolation
 - [x] **Private Room Codes** — 6-letter codes to play with friends
 - [x] **Invite Links** — shareable URLs that auto-join a room
 - [x] **Mobile Responsive** — optimized for phones and tablets
-
----
